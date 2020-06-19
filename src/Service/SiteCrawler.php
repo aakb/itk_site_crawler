@@ -4,7 +4,6 @@ namespace App\Service;
 
 use Symfony\Component\DomCrawler\Crawler;
 use Symfony\Component\HttpClient\HttpClient;
-use Symfony\Component\Serializer\SerializerInterface;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
@@ -19,15 +18,20 @@ class SiteCrawler
     // Max visits pr. site. Use command option to limit further.
     private $count = 50000;
     private $gdprCompliant;
-    private $serializer;
     private $spreadsheet;
+    private $timeStart;
+    private $timeEnd;
 
-    public function __construct(GdprCompliant $gdprCompliant, SerializerInterface $serializer)
+    public function __construct(GdprCompliant $gdprCompliant)
     {
         $this->gdprCompliant = $gdprCompliant;
-        $this->serializer = $serializer;
     }
 
+    /**
+     * Set a max number of pagevisits.
+     *
+     * @param $maxVisits
+     */
     public function setMaxVisits($maxVisits) {
         $this->count = $maxVisits;
     }
@@ -63,7 +67,7 @@ class SiteCrawler
         $this->domain = $domain;
         // Initialize list.
         $this->uriList[] = $domain;
-
+        $this->timeStart = microtime(true);
         $i = 0;
         while ($i < $this->count && $i < count($this->uriList))
         {
@@ -72,6 +76,7 @@ class SiteCrawler
             $i++;
         }
 
+        $this->timeEnd = microtime(true);
         $this->outputResult();
     }
 
@@ -91,7 +96,7 @@ class SiteCrawler
         foreach($domains as $domain) {
             // Initialize list.
             $this->uriList[] = $domain;
-
+            $this->timeStart = microtime(true);
             $i = 0;
             while ($i < $this->count && $i < count($this->uriList))
             {
@@ -100,6 +105,7 @@ class SiteCrawler
                 $i++;
             }
 
+            $this->timeEnd = microtime(true);
             $this->outputResult();
         }
     }
@@ -236,18 +242,19 @@ class SiteCrawler
 
         $this->outputPageSheet();
 
-        $filename = preg_replace('#^https?://#', '', $this->domain) . '-result.xlsx';
+        $filename = 'output/' . preg_replace('#^https?://#', '', $this->domain) . '-result.xlsx';
         $writer = new Xlsx($this->spreadsheet);
         $writer->save($filename);
         $this->printToConsole($filename);
     }
 
     /**
-     * Outbut global sheet
+     * Output global sheet.
      */
     private function outputGlobalSheet() {
         $foundCount = count($this->uriList);
         $visitedCount = $this->count > $foundCount ? $foundCount : $this->count;
+        $timeSpent = $this->timeEnd - $this->timeStart;
         $sheet = $this->spreadsheet->getSheetByName('Global output');
         $sheet->setCellValueByColumnAndRow(1, 1, 'Domain');
         $sheet->setCellValueByColumnAndRow(2, 1, $this->uriList[0]);
@@ -255,16 +262,18 @@ class SiteCrawler
         $sheet->setCellValueByColumnAndRow(2, 2, $visitedCount);
         $sheet->setCellValueByColumnAndRow(1, 3, 'Pages Found');
         $sheet->setCellValueByColumnAndRow(2, 3, $foundCount);
-        $sheet->setCellValueByColumnAndRow(1, 4, '---');
-        $sheet->setCellValueByColumnAndRow(1, 5, 'Found indications of:');
-        $currentRow = 6;
+        $sheet->setCellValueByColumnAndRow(1, 4, 'Time spent');
+        $sheet->setCellValueByColumnAndRow(2, 4, (int)$timeSpent . 'sec');
+        $sheet->setCellValueByColumnAndRow(1, 5, '---');
+        $sheet->setCellValueByColumnAndRow(1, 6, 'Found indications of:');
+        $currentRow = 7;
         foreach ($this->errors['global'] as $key => $error) {
             $sheet->setCellValueByColumnAndRow(1, $currentRow, $key);
         }
     }
 
     /**
-     * Output page sheet
+     * Output page sheet.
      */
     private function outputPageSheet() {
         $sheet = $this->spreadsheet->getSheetByName('Page output');
@@ -298,7 +307,7 @@ class SiteCrawler
         print PHP_EOL;
         print "---";
         print PHP_EOL;
-        print "Wrote file: output/" . $filename . " to disc.";
+        print "Wrote file: " . $filename . " to disc.";
         print PHP_EOL;
     }
 }
