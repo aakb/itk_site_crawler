@@ -3,9 +3,10 @@
 namespace App\Service;
 
 use Symfony\Component\DomCrawler\Crawler;
-use Symfony\Component\CssSelector\CssSelectorConverter;
 use Symfony\Component\HttpClient\HttpClient;
-use App\Service\GdprCompliant;
+use Symfony\Component\Serializer\SerializerInterface;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 class SiteCrawler
 {
@@ -15,12 +16,20 @@ class SiteCrawler
         'pages' => array(),
     );
     private $domain;
-    private $count = 200;
+    // Max visits pr. site. Use command option to limit further.
+    private $count = 50000;
     private $gdprCompliant;
+    private $serializer;
+    private $spreadsheet;
 
-    public function __construct(GdprCompliant $gdprCompliant)
+    public function __construct(GdprCompliant $gdprCompliant, SerializerInterface $serializer)
     {
         $this->gdprCompliant = $gdprCompliant;
+        $this->serializer = $serializer;
+    }
+
+    public function setMaxVisits($maxVisits) {
+        $this->count = $maxVisits;
     }
 
     /**
@@ -52,6 +61,7 @@ class SiteCrawler
     public function crawlSingle($domain)
     {
         $this->domain = $domain;
+        // Initialize list.
         $this->uriList[] = $domain;
 
         $i = 0;
@@ -79,12 +89,7 @@ class SiteCrawler
     public function crawlMultiple($domains)
     {
         foreach($domains as $domain) {
-            $this->errors = array(
-              'global' => array(),
-              'pages' => array(),
-            );
-            $this->domain = $domain;
-            $this->count = 500;
+            // Initialize list.
             $this->uriList[] = $domain;
 
             $i = 0;
@@ -103,6 +108,7 @@ class SiteCrawler
      * Crawl a specific page within a domain.
      *
      * @param $domain
+     * @param $current_count
      *
      * @throws \Symfony\Contracts\HttpClient\Exception\ClientExceptionInterface
      * @throws \Symfony\Contracts\HttpClient\Exception\RedirectionExceptionInterface
@@ -125,7 +131,10 @@ class SiteCrawler
             }
         }
         $errors = $this->gdprCompliant->searchIframe($html, $domain);
-        $errors_global = $this->gdprCompliant->searchCustomCookieBanner($html);
+        $errors_global_custom_cookie_banner = $this->gdprCompliant->searchCustomCookieBanner($html);
+        $errors_global_siteimprove = $this->gdprCompliant->searchSiteImprove($html);
+        $errors_global_facebook = $this->gdprCompliant->searchFacebook($html);
+        $errors_global_google_analytics = $this->gdprCompliant->searchGoogleAnalytics($html);
         if ($errors) {
             $this->errors = array_merge_recursive($this->errors, $errors);
             print 'X';
@@ -134,8 +143,21 @@ class SiteCrawler
             print '.';
         }
 
-        if($errors_global) {
-            $this->errors = array_merge_recursive($this->errors, $errors_global);
+        // @todo Make an event based approach
+        if ($errors_global_custom_cookie_banner) {
+            $this->errors = array_merge_recursive($this->errors, $errors_global_custom_cookie_banner);
+        }
+
+        if ($errors_global_siteimprove) {
+            $this->errors = array_merge_recursive($this->errors, $errors_global_siteimprove);
+        }
+
+        if ($errors_global_facebook) {
+            $this->errors = array_merge_recursive($this->errors, $errors_global_facebook);
+        }
+
+        if ($errors_global_google_analytics) {
+            $this->errors = array_merge_recursive($this->errors, $errors_global_google_analytics);
         }
 
         // Print status every 50 result.
@@ -201,9 +223,82 @@ class SiteCrawler
      * Output the result.
      */
     private function outputResult() {
-        print_r($this->uriList);
-        print '---';
-        print_r($this->errors);
-        // @todo Output results as csv.
+        $this->spreadsheet = new Spreadsheet();
+        $sheet = $this->spreadsheet->getActiveSheet();
+        $sheet->setTitle('Global output');
+
+
+        $this->outputGlobalSheet();
+
+        // Create a new sheet for page output
+        $pageSheet = $this->spreadsheet->createSheet();
+        $pageSheet->setTitle('Page output');
+
+        $this->outputPageSheet();
+
+        $filename = preg_replace('#^https?://#', '', $this->domain) . '-result.xlsx';
+        $writer = new Xlsx($this->spreadsheet);
+        $writer->save($filename);
+        $this->printToConsole($filename);
+    }
+
+    /**
+     * Outbut global sheet
+     */
+    private function outputGlobalSheet() {
+        $foundCount = count($this->uriList);
+        $visitedCount = $this->count > $foundCount ? $foundCount : $this->count;
+        $sheet = $this->spreadsheet->getSheetByName('Global output');
+        $sheet->setCellValueByColumnAndRow(1, 1, 'Domain');
+        $sheet->setCellValueByColumnAndRow(2, 1, $this->uriList[0]);
+        $sheet->setCellValueByColumnAndRow(1, 2, 'Pages visited');
+        $sheet->setCellValueByColumnAndRow(2, 2, $visitedCount);
+        $sheet->setCellValueByColumnAndRow(1, 3, 'Pages Found');
+        $sheet->setCellValueByColumnAndRow(2, 3, $foundCount);
+        $sheet->setCellValueByColumnAndRow(1, 4, '---');
+        $sheet->setCellValueByColumnAndRow(1, 5, 'Found indications of:');
+        $currentRow = 6;
+        foreach ($this->errors['global'] as $key => $error) {
+            $sheet->setCellValueByColumnAndRow(1, $currentRow, $key);
+        }
+    }
+
+    /**
+     * Output page sheet
+     */
+    private function outputPageSheet() {
+        $sheet = $this->spreadsheet->getSheetByName('Page output');
+
+        // Set header for first col.
+        $sheet->setCellValueByColumnAndRow(1, 1, 'URL');
+        $currentCol = 1;
+        $currentRow = 2;
+
+        foreach ($this->errors['pages'] as $path => $page) {
+            $sheet->setCellValueByColumnAndRow($currentCol, $currentRow, $path);
+            foreach ($page as $type => $result) {
+                foreach ($result as $output) {
+                    $currentCol ++;
+                    // Set header for new col.
+                    $sheet->setCellValueByColumnAndRow($currentCol, 1, $type);
+                    $sheet->setCellValueByColumnAndRow($currentCol, $currentRow, $output);
+                }
+                $currentRow ++;
+                $currentCol = 1;
+            }
+        }
+    }
+
+    /**
+     * Print end result to console.
+     *
+     * @param $filename
+     */
+    private function printToConsole($filename) {
+        print PHP_EOL;
+        print "---";
+        print PHP_EOL;
+        print "Wrote file: output/" . $filename . " to disc.";
+        print PHP_EOL;
     }
 }

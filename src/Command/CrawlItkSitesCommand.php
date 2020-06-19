@@ -37,6 +37,7 @@ class CrawlItkSitesCommand extends Command
             ->setDescription('Crawls one or all ITK sites')
             ->addArgument('service_name', InputArgument::OPTIONAL, 'The service to use with the crawler (i.e "gdpr_compliant")')
             ->addOption('domain', null, InputOption::VALUE_REQUIRED, 'A specific domain to crawl')
+            ->addOption('max-visits', null, InputOption::VALUE_REQUIRED, 'The max number of unique URLs to visit within a domain.')
         ;
     }
 
@@ -54,6 +55,8 @@ class CrawlItkSitesCommand extends Command
     {
         $io = new SymfonyStyle($input, $output);
         $serviceName = $input->getArgument('service_name');
+        $domain = $input->getOption('domain');
+        $maxVisits = $input->getOption('max-visits');
 
         if (empty($serviceName)) {
             $io->error('Missing service argument.');
@@ -65,7 +68,10 @@ class CrawlItkSitesCommand extends Command
             return Command::FAILURE;
         }
 
-        $domain = $input->getOption('domain');
+        if ($maxVisits) {
+           $this->siteCrawler->setMaxVisits($maxVisits);
+        }
+
         if ($domain) {
           $this->siteCrawler->crawlSingle($domain, $serviceName);
         }
