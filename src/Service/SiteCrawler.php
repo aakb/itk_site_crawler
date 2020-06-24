@@ -269,7 +269,13 @@ class SiteCrawler
         $currentRow = 7;
         foreach ($this->errors['global'] as $key => $error) {
             $sheet->setCellValueByColumnAndRow(1, $currentRow, $key);
+            $currentRow ++;
         }
+
+        // Add spacing
+        $currentRow ++;
+
+        $sheet->setCellValueByColumnAndRow(1, $currentRow, 'See Page output tab for details');
     }
 
     /**
